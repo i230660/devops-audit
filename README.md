@@ -1,66 +1,77 @@
 # DevOps Repository Auditing Agent
 
-An LLM-driven agent that clones a public GitHub repository, investigates it with read-only tools, and writes an
-evidence-based JSON report of DevOps best-practice violations. The agent loop, tool dispatch and control flow are
-plain Python (no LangChain/LangGraph/n8n); the only provider dependency is the Google Gemini SDK (`google-genai`) in `llm.py`, using Gemini's free tier.
+An LLM-powered agent that audits public GitHub repositories for potential DevOps best-practice violations and generates an evidence-based JSON report with recommendations.
 
-## Architecture
+The agent uses Python for its control flow and tool execution, with Google's Gemini API for reasoning and tool selection. It follows an **Observe → Reason → Select Tool → Execute → Interpret → Report** loop, allowing the LLM to decide what to inspect next rather than following a fixed checklist.
 
-```
-agent.py          CLI: validate URL -> shallow clone to temp dir -> run loop -> write report -> cleanup
-audit_agent.py    Explicit loop: LLM message -> tool_use blocks -> Python executes -> tool_result back to LLM
-tools.py          list_files, read_file, search_code, git_log (read-only, path-confined, secret-redacting)
-report.py         FindingStore (validation, de-duplication, auto rule_id) + atomic JSON writer
-prompts.py        System prompt: method, areas to probe, evidence rules, severity guide
-llm.py            Gemini SDK wrapper: tool-call translation, free-tier throttling, retry/backoff (swap this file to change provider)
-tests/            pytest suite (tools + agent loop with a scripted fake LLM)
-```
+## Features
 
-Cycle: **Observe** (tool output) -> **Reason** (LLM states what it saw/suspects) -> **Select tool** (LLM picks the
-next tool and arguments, including follow-ups) -> **Execute** (Python) -> **Interpret** (next LLM turn) ->
-**Report** (`report_violation`, then `finish_audit`). There is no fixed checklist: the LLM decides every tool call.
-Every call is logged to `<output>.trace.jsonl` (thought, tool, args, output preview).
+- Audits repository hygiene, dependencies, code quality, testing, CI/CD, security, configuration, collaboration, and build/release practices.
+- Uses read-only tools to list files, read code, search content, and inspect Git history.
+- Validates findings, checks evidence and line numbers, and removes duplicates.
+- Records the audit process in a JSONL trace for debugging and review.
+- Redacts secret-like values from tool outputs, traces, and reports.
+- Uses a temporary shallow clone and never modifies the target repository or executes its code.
+- Includes step limits, time limits, API retries, and error handling.
 
-### Precision / safety design
-- `report_violation` is validated in Python: the file must exist, must have been read or appeared in a search, the line
-  must be in range, and duplicates are rejected. Missing things are reported with `file: null, line: null`.
-- The prompt encodes the evidence rule: acceptable alternatives are not defects; branch protection is never inferred.
-- Target code is never executed (no pytest/ruff run on untrusted code). The clone lives in a temp dir that is deleted;
-  nothing is written to or pushed to the target.
-- Secret-like literals are redacted in every tool output, the trace and the report.
-- Errors: invalid URL (exit 2), missing API key (2), clone failure (3), LLM failure (4), report write failure (5),
-  unexpected (1). Step and time budgets bound the loop.
+## Project Structure
+
+- `agent.py` — CLI, cloning, and cleanup.
+- `audit_agent.py` — Main agent loop and tool execution.
+- `tools.py` — Read-only repository inspection tools.
+- `report.py` — Finding validation and JSON report generation.
+- `prompts.py` — Audit instructions and evidence requirements.
+- `llm.py` — Gemini integration, tool-call handling, and rate limiting.
+- `tests/` — Tests for repository tools and agent behavior.
 
 ## Setup
-```bash
-git clone <this-repo> && cd <this-repo>
-python -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-cp .env.example .env                                   # then set GEMINI_API_KEY (free: https://aistudio.google.com/apikey)
-```
-Requires Python 3.10+ and `git` on PATH.
 
-## Run
+Requires Python 3.10+, Git, and a Gemini API key.
+
+```bash
+git clone https://github.com/i230660/devops-audit.git
+cd devops-audit
+
+python -m venv .venv
+```
+
+Activate the virtual environment, then install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+Create a `.env` file from `.env.example` and add your API key:
+
+```dotenv
+GEMINI_API_KEY=your_api_key_here
+```
+
+Get a key from [Google AI Studio](https://aistudio.google.com/apikey).
+
+## Usage
+
 ```bash
 python agent.py --repo https://github.com/<owner>/<repo> --output report.json
 ```
-Options: `--max-steps 40`, `--time-budget 900`, `--trace path.jsonl`, `--model <name>`.
 
-### Free-tier notes
-Calls are throttled (`GEMINI_MIN_INTERVAL`, default 5 s) and retried on HTTP 429/5xx. If the daily quota is exhausted the
-agent exits with code 4 and a clear message. Set `GEMINI_MODEL` to any free model; `python llm.py` lists the models your
-key can use. Free-tier prompts may be used by Google to improve its products, which is fine for public repositories.
+Optional arguments include `--max-steps`, `--time-budget`, `--trace`, and `--model`.
 
-## Tests
+Run the tests with:
+
 ```bash
 pytest -q
 ```
 
-## Report format
-`{"repository": "...", "violations": [{rule_id, category, severity, file, line, description, evidence, recommendation}]}`
-Categories: repository_hygiene, dependency_management, code_quality, testing, ci_cd, security, configuration,
-collaboration, build_release. Severities: critical, high, medium, low. `sample_report.json` is real output.
+## Report
+
+The agent generates a JSON report containing the repository URL and a list of violations. Each finding includes a rule ID, category, severity, file and line (when applicable), evidence, description, and recommendation.
+
+See `sample_report.json` for an example.
 
 ## Limitations
-Shallow clone (200 commits). Remote settings (branch protection, secret scanning) cannot be inspected from files
-and are never reported. Findings depend on LLM judgement; the trace shows how each was reached.
+
+- Only the latest 200 commits are cloned.
+- Remote GitHub settings, such as branch protection and secret scanning, cannot be verified.
+- Findings depend on the LLM's judgment and should be reviewed.
+- Gemini free-tier quotas and rate limits may restrict usage.
