@@ -1,5 +1,5 @@
-"""The explicit agent loop: the LLM decides which tool to call next; Python executes it."""
 import json
+import sys
 import time
 from pathlib import Path
 
@@ -12,6 +12,7 @@ REPORT_TOOL_SPECS = [
      "description": "Record one confirmed DevOps violation. Rejected if the file does not exist, was never "
                     "inspected, the line is out of range, or it duplicates an earlier finding.",
      "input_schema": {"type": "object", "properties": {
+         "reasoning": {"type": "string", "description": "Why this is a genuine violation (1-2 sentences)"},
          "category": {"type": "string", "enum": sorted(CATEGORY_PREFIX)},
          "severity": {"type": "string", "enum": list(SEVERITIES)},
          "file": {"type": ["string", "null"], "description": "Omit or null if the problem is something missing"},
@@ -63,7 +64,7 @@ class AuditAgent:
         if name == "finish_audit":
             return "Audit marked complete.", True
         if name == "report_violation":
-            _, msg = self.store.add(args)
+            _, msg = self.store.add({k: v for k, v in args.items() if k != "reasoning"})
             return msg, False
         return self.tools.dispatch(name, args), False
 
@@ -92,8 +93,11 @@ class AuditAgent:
             for u in uses:
                 out, finished = self._execute(u)
                 done = done or finished
-                self._log({"step": step, "thought": redact(thought), "tool": u["name"],
-                           "args": u.get("input"), "output_preview": out[:400]})
+                args = dict(u.get("input") or {})
+                why = redact(thought or str(args.pop("reasoning", "") or ""))
+                self._log({"step": step, "thought": why, "tool": u["name"],
+                           "args": args, "output_preview": out[:400]})
+                print(f"[step {step}] {u['name']} {json.dumps(args)[:110]}", file=sys.stderr, flush=True)
                 results.append({"type": "tool_result", "tool_use_id": u["id"], "content": out})
             if step == self.max_steps - 2 and not done:
                 results.append({"type": "text", "text":

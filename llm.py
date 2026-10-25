@@ -1,6 +1,7 @@
 
 import os
 import re
+import sys
 import time
 
 from google import genai
@@ -108,10 +109,13 @@ class GeminiLLM:
             except errors.APIError as e:
                 code = getattr(e, "code", None)
                 if code == 429 and "PerDay" in str(e):
-                    raise LLMError("Gemini free-tier DAILY quota exhausted for this model; try again "
-                                   "tomorrow or set GEMINI_MODEL to another free model") from e
+                    raise LLMError("Gemini DAILY quota error for this model; try another GEMINI_MODEL. "
+                                   f"Details: {str(e)[:600]}") from e
                 if code in (429, 500, 503, 504) and attempt < 5:
-                    time.sleep(min(max(_retry_delay(e), 5 * 2 ** attempt), 90))
+                    wait = min(max(_retry_delay(e), 5 * 2 ** attempt), 90)
+                    print(f"[llm] HTTP {code}, waiting {wait:.0f}s then retrying "
+                          f"({attempt + 1}/5)", file=sys.stderr, flush=True)
+                    time.sleep(wait)
                     continue
                 if code == 404:
                     raise LLMError(f"Gemini model '{self.model}' not found; run `python llm.py` to list "

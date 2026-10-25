@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""CLI entry point:  python agent.py --repo <github_url> --output report.json"""
 import argparse
 import os
 import re
